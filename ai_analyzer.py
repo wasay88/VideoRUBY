@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 AI Analyzer - Умный анализ видео через LLM
-Вдохновлено: github.com/coderroleggg/autoeditor
 
 Возможности:
 1. Определение "bad takes" (неудачных дублей)

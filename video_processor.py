@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Локальная система обработки видео для Final Cut Pro
-Аналог Gling.ai - удаление пауз + автоматические субтитры
+Удаление пауз + автоматические субтитры
 """
 
 import os
@@ -9,7 +9,7 @@ import json
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import tempfile
 
 
@@ -24,14 +24,30 @@ class Segment:
 class VideoProcessor:
     """Основной класс для обработки видео"""
 
-    def __init__(self, silence_threshold_db: float = -35, min_silence_duration: float = 0.5):
+    def __init__(
+        self,
+        silence_threshold_db: float = -35,
+        min_silence_duration: float = 0.5,
+        crf: int = 16,
+        video_bitrate: Optional[str] = None,
+        preset: str = "slow",
+        audio_bitrate: str = "192k"
+    ):
         """
         Args:
             silence_threshold_db: Порог тишины в dB (по умолчанию -35)
             min_silence_duration: Минимальная длительность паузы для удаления (секунды)
+            crf: Качество перекодирования (меньше = лучше)
+            video_bitrate: Битрейт видео (например, "20M"). Если задан, CRF игнорируется
+            preset: Пресет кодирования x264 (slow = лучшее качество)
+            audio_bitrate: Битрейт аудио
         """
         self.silence_threshold = silence_threshold_db
         self.min_silence_duration = min_silence_duration
+        self.crf = crf
+        self.video_bitrate = video_bitrate
+        self.preset = preset
+        self.audio_bitrate = audio_bitrate
 
     def detect_silences(self, video_path: str) -> List[Tuple[float, float]]:
         """
@@ -149,59 +165,43 @@ class VideoProcessor:
             print("⚠️  Не найдено речевых сегментов!")
             return video_path
 
-        # Создаем временный файл для конкатенации
-        temp_dir = tempfile.mkdtemp()
-        concat_file = os.path.join(temp_dir, 'concat_list.txt')
-        segment_files = []
+        # Конкатенация через filter_complex с перекодированием
+        # Это предотвращает артефакты из-за резки по ключевым кадрам.
+        filter_parts = []
+        concat_inputs = []
 
-        # Вырезаем каждый речевой сегмент
         for i, seg in enumerate(speech_segments):
-            segment_path = os.path.join(temp_dir, f'segment_{i:04d}.mp4')
-            segment_files.append(segment_path)
+            filter_parts.append(
+                f"[0:v]trim=start={seg.start}:end={seg.end},setpts=PTS-STARTPTS[v{i}]"
+            )
+            filter_parts.append(
+                f"[0:a]atrim=start={seg.start}:end={seg.end},asetpts=PTS-STARTPTS[a{i}]"
+            )
+            concat_inputs.append(f"[v{i}][a{i}]")
 
-            duration = seg.end - seg.start
+        concat_filter = "".join(concat_inputs) + f"concat=n={len(speech_segments)}:v=1:a=1[outv][outa]"
+        filter_complex = ";".join(filter_parts + [concat_filter])
 
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-ss', str(seg.start),
-                '-t', str(duration),
-                '-c', 'copy',
-                '-y',
-                segment_path
-            ]
+        video_opts = ['-c:v', 'libx264']
+        if self.video_bitrate:
+            video_opts += ['-b:v', self.video_bitrate, '-preset', self.preset]
+        else:
+            video_opts += ['-crf', str(self.crf), '-preset', self.preset]
 
-            subprocess.run(cmd, capture_output=True)
-
-        # Создаем файл для конкатенации
-        with open(concat_file, 'w') as f:
-            for seg_file in segment_files:
-                f.write(f"file '{seg_file}'\n")
-
-        # Объединяем все сегменты
         cmd = [
             'ffmpeg',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', concat_file,
-            '-c', 'copy',
+            '-i', video_path,
+            '-filter_complex', filter_complex,
+            '-map', '[outv]',
+            '-map', '[outa]',
+            *video_opts,
+            '-c:a', 'aac',
+            '-b:a', self.audio_bitrate,
             '-y',
             output_path
         ]
 
         subprocess.run(cmd, capture_output=True)
-
-        # Очищаем временные файлы
-        for seg_file in segment_files:
-            try:
-                os.remove(seg_file)
-            except:
-                pass
-        try:
-            os.remove(concat_file)
-            os.rmdir(temp_dir)
-        except:
-            pass
 
         print(f"✅ Видео обработано: {output_path}")
         return output_path

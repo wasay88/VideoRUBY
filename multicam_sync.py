@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Multicam Synchronizer - Синхронизация нескольких камер
-Вдохновлено: github.com/coderroleggg/autoeditor
 
 Автоматически синхронизирует видео с нескольких камер по:
 1. Аудио-форме волны (waveform matching)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Dict
 from xml.etree import ElementTree as ET
 from xml.dom import minidom
+import subprocess
 
 
 class FCPXMLGenerator:
@@ -30,6 +31,26 @@ class FCPXMLGenerator:
             fps = eval(self.framerate)
             frames = int(seconds * fps)
         return f"{frames}s"
+
+    def _seconds_to_time(self, seconds: float) -> str:
+        """Конвертирует секунды в рациональный формат времени для FCPXML"""
+        millis = int(round(seconds * 1000))
+        return f"{millis}/1000s"
+
+    def _get_video_duration(self, video_path: str) -> float:
+        """Получает длительность видео через ffprobe"""
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            return float(result.stdout.strip())
+        except Exception:
+            return 0.0
 
     def create_fcpxml(
         self,
@@ -76,13 +97,18 @@ class FCPXMLGenerator:
             'asset',
             id="r2",
             name=video_name,
-            src=f"file://{video_path_abs}",
             start="0s",
             hasVideo="1",
             hasAudio="1",
             format="r1",
             audioSources="1",
             audioChannels="2"
+        )
+        ET.SubElement(
+            asset,
+            'media-rep',
+            kind="original-media",
+            src=f"file://{video_path_abs}"
         )
 
         # Создаем библиотеку и событие
@@ -91,11 +117,12 @@ class FCPXMLGenerator:
         project = ET.SubElement(event, 'project', name=project_name)
 
         # Создаем последовательность (timeline)
+        duration_seconds = subtitles[-1]['end'] if subtitles else self._get_video_duration(video_path)
         sequence = ET.SubElement(
             project,
             'sequence',
             format="r1",
-            duration=self.seconds_to_frames(subtitles[-1]['end'] if subtitles else 60)
+            duration=self._seconds_to_time(duration_seconds if duration_seconds else 60)
         )
 
         spine = ET.SubElement(sequence, 'spine')
@@ -107,7 +134,8 @@ class FCPXMLGenerator:
             ref="r2",
             offset="0s",
             name=video_name,
-            duration=self.seconds_to_frames(subtitles[-1]['end'] if subtitles else 60),
+            start="0s",
+            duration=self._seconds_to_time(duration_seconds if duration_seconds else 60),
             format="r1",
             tcFormat="NDF"
         )
@@ -198,18 +226,29 @@ class FCPXMLGenerator:
             'asset',
             id="r2",
             name=video_name,
-            src=f"file://{video_path_abs}",
             start="0s",
             hasVideo="1",
             hasAudio="1",
             format="r1"
+        )
+        ET.SubElement(
+            asset,
+            'media-rep',
+            kind="original-media",
+            src=f"file://{video_path_abs}"
         )
 
         library = ET.SubElement(fcpxml, 'library')
         event = ET.SubElement(library, 'event', name=project_name)
         project = ET.SubElement(event, 'project', name=project_name)
 
-        sequence = ET.SubElement(project, 'sequence', format="r1")
+        duration_seconds = self._get_video_duration(video_path)
+        sequence = ET.SubElement(
+            project,
+            'sequence',
+            format="r1",
+            duration=self._seconds_to_time(duration_seconds if duration_seconds else 60)
+        )
         spine = ET.SubElement(sequence, 'spine')
 
         asset_clip = ET.SubElement(
@@ -218,6 +257,8 @@ class FCPXMLGenerator:
             ref="r2",
             offset="0s",
             name=video_name,
+            start="0s",
+            duration=self._seconds_to_time(duration_seconds if duration_seconds else 60),
             format="r1"
         )
 

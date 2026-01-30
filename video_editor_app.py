@@ -29,6 +29,8 @@ class VideoEditorApp:
         self.silence_threshold = tk.DoubleVar(value=-35)
         self.min_silence_duration = tk.DoubleVar(value=0.5)
         self.whisper_model = tk.StringVar(value="base")
+        self.crf = tk.IntVar(value=16)
+        self.video_bitrate = tk.StringVar(value="")
         self.processing = False
 
         self.setup_ui()
@@ -125,6 +127,28 @@ class VideoEditorApp:
         )
         model_combo.pack(side=tk.LEFT, padx=5)
         ttk.Label(model_frame, text="(base = оптимально)").pack(side=tk.LEFT)
+
+        # Качество кодирования
+        quality_frame = ttk.Frame(settings_frame)
+        quality_frame.pack(fill=tk.X, pady=3)
+
+        ttk.Label(quality_frame, text="CRF (качество, меньше = лучше):").pack(side=tk.LEFT)
+        crf_spin = ttk.Spinbox(
+            quality_frame,
+            from_=0,
+            to=30,
+            textvariable=self.crf,
+            width=5
+        )
+        crf_spin.pack(side=tk.LEFT, padx=5)
+        ttk.Label(quality_frame, text="(рекомендуется 16)").pack(side=tk.LEFT, padx=5)
+
+        bitrate_frame = ttk.Frame(settings_frame)
+        bitrate_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(bitrate_frame, text="Битрейт видео (например 20M):").pack(side=tk.LEFT)
+        bitrate_entry = ttk.Entry(bitrate_frame, textvariable=self.video_bitrate, width=10)
+        bitrate_entry.pack(side=tk.LEFT, padx=5)
+        ttk.Label(bitrate_frame, text="(если задан, CRF игнорируется)").pack(side=tk.LEFT, padx=5)
 
         # === 3. Кнопка запуска ===
         action_frame = ttk.Frame(main_frame)
@@ -233,7 +257,9 @@ class VideoEditorApp:
 
             processor = VideoProcessor(
                 silence_threshold_db=self.silence_threshold.get(),
-                min_silence_duration=self.min_silence_duration.get()
+                min_silence_duration=self.min_silence_duration.get(),
+                crf=self.crf.get(),
+                video_bitrate=self.video_bitrate.get().strip() or None
             )
 
             result = processor.process_video(video_path)
