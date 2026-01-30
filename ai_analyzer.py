@@ -156,6 +156,9 @@ class AIAnalyzer:
                 for seg in transcription
             ])
 
+            # Подготавливаем опциональный скрипт
+            script_section = f"Сценарий для сопоставления:\n{script}\n\n" if script else ""
+
             prompt = f"""Проанализируй транскрипцию видео и определи good/bad takes.
 
 Bad takes - это:
@@ -172,9 +175,7 @@ Good takes - это:
 Транскрипция:
 {transcript_text}
 
-{"Сценарий для сопоставления:\n" + script if script else ""}
-
-Верни JSON массив с анализом каждого сегмента:
+{script_section}Верни JSON массив с анализом каждого сегмента:
 [
   {{"start": 0.0, "end": 5.0, "is_good": true, "reason": "Чистая речь", "confidence": 0.9}},
   ...
