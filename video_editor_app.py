@@ -31,9 +31,23 @@ class VideoEditorApp:
         self.whisper_model = tk.StringVar(value="base")
         self.crf = tk.IntVar(value=16)
         self.video_bitrate = tk.StringVar(value="")
+        self.output_edited_video = tk.BooleanVar(value=True)
+        self.output_subtitles = tk.BooleanVar(value=True)
+        self.output_fcpxml = tk.BooleanVar(value=True)
         self.processing = False
 
         self.setup_ui()
+        self.root.after(150, self._bring_to_front)
+
+    def _bring_to_front(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after(200, lambda: self.root.attributes("-topmost", False))
+            self.root.focus_force()
+        except Exception:
+            pass
 
     def setup_ui(self):
         """Создает интерфейс"""
@@ -150,6 +164,26 @@ class VideoEditorApp:
         bitrate_entry.pack(side=tk.LEFT, padx=5)
         ttk.Label(bitrate_frame, text="(если задан, CRF игнорируется)").pack(side=tk.LEFT, padx=5)
 
+        # Выходные файлы
+        outputs_frame = ttk.LabelFrame(main_frame, text="3. Выходные файлы", padding="10")
+        outputs_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Checkbutton(
+            outputs_frame,
+            text="Смонтированное видео (без пауз)",
+            variable=self.output_edited_video
+        ).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            outputs_frame,
+            text="Субтитры (SRT)",
+            variable=self.output_subtitles
+        ).pack(anchor=tk.W)
+        ttk.Checkbutton(
+            outputs_frame,
+            text="Проект Final Cut Pro (FCPXML)",
+            variable=self.output_fcpxml
+        ).pack(anchor=tk.W)
+
         # === 3. Кнопка запуска ===
         action_frame = ttk.Frame(main_frame)
         action_frame.pack(fill=tk.X, pady=10)
@@ -233,6 +267,10 @@ class VideoEditorApp:
             messagebox.showerror("Ошибка", "Выберите видео файл!")
             return
 
+        if not (self.output_edited_video.get() or self.output_subtitles.get() or self.output_fcpxml.get()):
+            messagebox.showwarning("Предупреждение", "Выберите хотя бы один выходной файл!")
+            return
+
         # Запускаем в отдельном потоке
         self.processing = True
         self.process_btn.config(state=tk.DISABLED)
@@ -251,78 +289,94 @@ class VideoEditorApp:
             self.log("=" * 60)
             self.log(f"📹 Файл: {Path(video_path).name}\n")
 
-            # Шаг 1: Удаление пауз
-            self.log("🔧 ШАГ 1: АНАЛИЗ И УДАЛЕНИЕ ПАУЗ")
-            self.log("-" * 60)
+            edited_video = None
+            result = None
 
-            processor = VideoProcessor(
-                silence_threshold_db=self.silence_threshold.get(),
-                min_silence_duration=self.min_silence_duration.get(),
-                crf=self.crf.get(),
-                video_bitrate=self.video_bitrate.get().strip() or None
-            )
+            if self.output_edited_video.get():
+                # Шаг 1: Удаление пауз
+                self.log("🔧 ШАГ 1: АНАЛИЗ И УДАЛЕНИЕ ПАУЗ")
+                self.log("-" * 60)
 
-            result = processor.process_video(video_path)
+                processor = VideoProcessor(
+                    silence_threshold_db=self.silence_threshold.get(),
+                    min_silence_duration=self.min_silence_duration.get(),
+                    crf=self.crf.get(),
+                    video_bitrate=self.video_bitrate.get().strip() or None
+                )
 
-            self.log(f"✅ Видео обработано!")
-            self.log(f"   Оригинал: {result['statistics']['original_duration']:.1f}с")
-            self.log(f"   После обработки: {result['statistics']['speech_duration']:.1f}с")
-            self.log(f"   Удалено пауз: {result['statistics']['silences_removed']}")
-            self.log(f"   Сэкономлено: {result['statistics']['silence_duration']:.1f}с\n")
+                result = processor.process_video(video_path)
+                edited_video = result['edited_video']
+
+                self.log(f"✅ Видео обработано!")
+                self.log(f"   Оригинал: {result['statistics']['original_duration']:.1f}с")
+                self.log(f"   После обработки: {result['statistics']['speech_duration']:.1f}с")
+                self.log(f"   Удалено пауз: {result['statistics']['silences_removed']}")
+                self.log(f"   Сэкономлено: {result['statistics']['silence_duration']:.1f}с\n")
 
             # Шаг 2: Транскрипция
-            self.log("🔧 ШАГ 2: ТРАНСКРИПЦИЯ И СУБТИТРЫ")
-            self.log("-" * 60)
+            subtitle_path = None
+            if self.output_subtitles.get():
+                self.log("🔧 ШАГ 2: ТРАНСКРИПЦИЯ И СУБТИТРЫ")
+                self.log("-" * 60)
 
-            transcriber = Transcriber(
-                model_size=self.whisper_model.get(),
-                language="ru"
-            )
+                transcriber = Transcriber(
+                    model_size=self.whisper_model.get(),
+                    language="ru"
+                )
 
-            # Транскрибируем отредактированное видео
-            edited_video = result['edited_video']
-            subtitle_path = transcriber.transcribe(edited_video, output_format="srt")
+                # Транскрибируем отредактированное или оригинальное видео
+                video_for_subs = edited_video if edited_video else video_path
+                subtitle_path = transcriber.transcribe(video_for_subs, output_format="srt")
 
-            self.log(f"✅ Субтитры созданы: {Path(subtitle_path).name}\n")
+                self.log(f"✅ Субтитры созданы: {Path(subtitle_path).name}\n")
 
             # Шаг 3: Генерация FCPXML
-            self.log("🔧 ШАГ 3: СОЗДАНИЕ FCPXML ДЛЯ FINAL CUT PRO")
-            self.log("-" * 60)
+            if self.output_fcpxml.get():
+                self.log("🔧 ШАГ 3: СОЗДАНИЕ FCPXML ДЛЯ FINAL CUT PRO")
+                self.log("-" * 60)
 
-            fcpxml_path = edited_video.replace('.mp4', '.fcpxml')
-            generator = FCPXMLGenerator()
+                video_for_fcpxml = edited_video if edited_video else video_path
+                fcpxml_path = Path(video_for_fcpxml).with_suffix('.fcpxml')
+                generator = FCPXMLGenerator()
 
-            generator.create_simple_fcpxml_with_srt(
-                edited_video,
-                subtitle_path,
-                fcpxml_path,
-                project_name=f"Edited - {Path(video_path).stem}"
-            )
+                generator.create_simple_fcpxml_with_srt(
+                    str(video_for_fcpxml),
+                    subtitle_path,
+                    str(fcpxml_path),
+                    project_name=f"Edited - {Path(video_path).stem}"
+                )
 
-            self.log(f"✅ FCPXML создан: {Path(fcpxml_path).name}\n")
+                self.log(f"✅ FCPXML создан: {Path(fcpxml_path).name}\n")
 
             # Итоги
             self.log("=" * 60)
             self.log("🎉 ОБРАБОТКА ЗАВЕРШЕНА!")
             self.log("=" * 60)
             self.log("\n📦 РЕЗУЛЬТАТЫ:")
-            self.log(f"  1. Отредактированное видео: {Path(edited_video).name}")
-            self.log(f"  2. Субтитры (SRT): {Path(subtitle_path).name}")
-            self.log(f"  3. Проект FCPXML: {Path(fcpxml_path).name}")
+            idx = 1
+            if edited_video:
+                self.log(f"  {idx}. Отредактированное видео: {Path(edited_video).name}")
+                idx += 1
+            if subtitle_path:
+                self.log(f"  {idx}. Субтитры (SRT): {Path(subtitle_path).name}")
+                idx += 1
+            if self.output_fcpxml.get():
+                self.log(f"  {idx}. Проект FCPXML: {Path(fcpxml_path).name}")
             self.log("\n📌 КАК ИМПОРТИРОВАТЬ В FINAL CUT PRO:")
             self.log("  1. File → Import → Files...")
-            self.log(f"  2. Выберите: {Path(fcpxml_path).name}")
-            self.log("  3. Откроется готовый проект с видео")
-            self.log("  4. File → Import → Captions...")
-            self.log(f"  5. Выберите: {Path(subtitle_path).name}")
+            if self.output_fcpxml.get():
+                self.log(f"  2. Выберите: {Path(fcpxml_path).name}")
+                self.log("  3. Откроется готовый проект с видео")
+                if subtitle_path:
+                    self.log("  4. File → Import → Captions...")
+                    self.log(f"  5. Выберите: {Path(subtitle_path).name}")
             self.log("\n✨ Готово! Можно работать в Final Cut Pro.")
 
             # Показываем диалог
             self.root.after(0, lambda: messagebox.showinfo(
                 "Успех!",
                 f"Обработка завершена!\n\n"
-                f"Файлы сохранены в:\n{os.path.dirname(edited_video)}\n\n"
-                f"Импортируйте {Path(fcpxml_path).name} в Final Cut Pro"
+                f"Файлы сохранены в:\n{os.path.dirname(edited_video or video_path)}"
             ))
 
         except Exception as e:
